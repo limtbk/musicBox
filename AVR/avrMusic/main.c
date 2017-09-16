@@ -49,6 +49,11 @@ const unsigned int PROGMEM packedNotes[] = {19, 28, 4, 211, 28, 4, 339, 28, 4, 3
 #define DURATION_BITOFFSET (DELTATIME_BITOFFSET + PACKED_DELTATIMES_BITS)
 #define DURATION_BITMASK (((1 << PACKED_DURATIONS_BITS) - 1) << DURATION_BITOFFSET)
 
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__)
+#define LED_PORT PORT_B5
+#elif defined(__AVR_ATmega16__) || defined(__AVR_ATmega32__)
+#define LED_PORT PORT_B0
+#endif
 
 long t = 0;
 unsigned int playingNotesFreq[SIMULTANEOUS_NOTES];
@@ -63,6 +68,45 @@ char refreshNotesList = 1;
 int corTime = 0;
 int corTimeCnt = 0;
 
+#if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__)
+ISR(TIMER2_COMPA_vect) //play next sample
+{
+	cli();
+	t++;
+	corTimeCnt++;
+	if (corTimeCnt>=TEMPO_SAMPLES) {
+		corTimeCnt = 0;
+		corTime++;
+		refreshNotesList = 1;
+	}
+	unsigned char buf = 0;
+
+    for (int l = 0; l < currentNotes; l++) {
+    	unsigned int keyFreq = playingNotesFreq[l];
+		unsigned int phase = playingNotesPhase[l];
+		phase += keyFreq;
+		playingNotesPhase[l] = phase;
+		unsigned int ab = phase & SAMPLE_RATE_MASK;
+        buf += (unsigned char) ((ab<(SAMPLE_RATE_DIV2)?0:30));
+	}
+
+    OCR0A = buf; //here will be function
+    sei();
+}
+
+void initPWM()
+{
+	SETD(PORT_D6); //set OC0A to output
+	TCCR0A = (2<<COM0A0)|(1<<WGM00)|(1<<WGM01); //fast PWM, clear OC0 on compare match
+	TCCR0B = (0b001<<CS00); //no prescaller
+	OCR0A = 127;
+
+	TCCR2A = (1<<WGM21)|(0<<WGM20); //CTC mode
+	TCCR2B = (0b010<<CS20); //prescaller CLK/8
+ 	OCR2A = OSC2_OCRVALUE; // 16 000 000 / 32 768 / 8 = 61
+ 	TIMSK2 = (1<<OCIE2A); //Interrupt on second timer compare
+}
+#elif defined(__AVR_ATmega16__) || defined(__AVR_ATmega32__)
 ISR(TIMER2_COMP_vect) //play next sample
 {
 	cli();
@@ -98,19 +142,21 @@ void initPWM()
  	OCR2 = OSC2_OCRVALUE; // 16 000 000 / 32 768 / 8 = 61
  	TIMSK = (1<<OCIE2); //Interrupt on second timer compare
 }
+#endif
+
 
 void init()
 {
 	initPWM();
-	SETD(PORT_B0);
+	SETD(LED_PORT);
 	sei();
 }
 
-int main()
+void main()
 {
 	init();
 	startDuration = PACKED_DURATIONS((PACKED_NOTES(startIdx) & DURATION_BITMASK) >> DURATION_BITOFFSET);
-	SETP(PORT_B0);
+	SETP(LED_PORT);
 
 	int ii = 1;
 	while (ii) {
@@ -126,7 +172,7 @@ int main()
 			refreshNotesList = 0;
 
         	while ((startIdx+1 < PACKED_NOTES_LENGTH) && (startTime + startDuration <= corTime)) {
-    			INVP(PORT_B0);
+    			INVP(LED_PORT);
         		startIdx++;
         		int packedNote = PACKED_NOTES(startIdx);
 				int deltaTime = PACKED_DELTA_TIMES((packedNote & DELTATIME_BITMASK) >> DELTATIME_BITOFFSET);
